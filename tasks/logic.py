@@ -1,8 +1,12 @@
+from typing import Any, Dict, Tuple
 import mlx.core as mx
+import mlx.nn as nn
+from tasks.base import Task
+from models import trm
+
 import numpy as np
 import random
 import itertools
-
 import string
 
 # Vocabulary for Propositional Logic
@@ -152,17 +156,36 @@ def fol_dataset(batch_size, seq_len=64, num_vars=4, max_depth=2, steps_per_epoch
     
     return InfiniteLoader(generator, steps), InfiniteLoader(generator, 10), meta
 
-if __name__ == "__main__":
-    print("Testing FOL Generator...")
-    g, _, meta = fol_dataset(batch_size=4)
-    batch = next(iter(g))
-    print("Batch shape:", batch['inputs'].shape)
-    print("Labels:", batch['label'])
-    
-    # Decode to check
-    inv = INV_VOCAB
-    for i in range(4):
-        seq = batch['inputs'][i].tolist()
-        txt = "".join([inv[t] for t in seq if t in inv and t != 0 and t != 12])
-        lbl = batch['label'][i].item()
-        print(f"Sample {i}: {txt} -> {lbl}")
+
+class LogicInferenceTask(Task):
+    def get_dataset(self, batch_size: int, **kwargs) -> Tuple[Any, Any, Dict[str, Any]]:
+        steps_per_epoch = kwargs.get("steps_per_epoch", 20)
+        return fol_dataset(batch_size, steps_per_epoch=steps_per_epoch)
+
+    def get_model_config(self, meta: Dict[str, Any]) -> trm.ModelConfig:
+        return trm.ModelConfig(
+            vocab_size=meta.get("vocab_size", 256),
+            depth=2,
+            dim=64,
+            heads=4,
+            n_outputs=2,
+        )
+
+    def loss_fn(self, model_outputs: Dict[str, mx.array], batch: Dict[str, mx.array], carry: Dict[str, Any]) -> Tuple[mx.array, mx.array, Dict[str, Any]]:
+        label = carry["current_data"]["label"]
+        pred = model_outputs["logits"]
+        is_correct = mx.argmax(pred, axis=1) == label
+
+        ce = nn.losses.cross_entropy(pred, label, reduction="mean")
+        bce = nn.losses.binary_cross_entropy(
+            model_outputs["q_halt_logits"], is_correct, with_logits=True, reduction="mean"
+        )
+        loss = ce + 0.5 * bce
+
+        stats = {
+            "q_prob_mean": mx.sigmoid(model_outputs["q_halt_logits"]).mean(),
+            "frac_halted": carry["halted"].mean(),
+            "avg_steps": carry["steps"].mean(),
+        }
+
+        return loss, mx.sum(is_correct), stats

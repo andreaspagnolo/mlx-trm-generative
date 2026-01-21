@@ -3,7 +3,6 @@ import argparse
 import mlx.core as mx
 import mlx.optimizers as optim
 
-from data import fol
 from models import trm
 from training.trainer import Trainer
 
@@ -12,7 +11,7 @@ parser.add_argument(
     "--dataset",
     type=str,
     default="fol",
-    choices=["mnist", "cifar10", "fol"],
+    choices=["fol"],
     help="dataset to use",
 )
 parser.add_argument("-b", "--batch_size", type=int, default=1024, help="batch size")
@@ -27,28 +26,19 @@ def main(args):
         mx.set_default_device(mx.cpu)
     mx.random.seed(args.seed)
 
-    if args.dataset == "mnist":
-        from data.vision import mnist
-        train_data, test_data, meta = mnist(args.batch_size)
-    elif args.dataset == "cifar10":
-        from data.vision import cifar10
-        train_data, test_data, meta = cifar10(args.batch_size)
-    elif args.dataset == "fol":
-        train_data, test_data, meta = fol.fol_dataset(args.batch_size, steps_per_epoch=20)
+    # Initialize Task
+    if args.dataset == "fol":
+        from tasks.logic import LogicInferenceTask
+        task = LogicInferenceTask()
     else:
         raise NotImplementedError(f"{args.dataset=} is not implemented.")
-    
-    # n_inputs = next(train_data)["image"].shape[1:] # Not needed for FOL or can be derived differently
-    # train_data.reset() # Generators might not have reset
 
+    # Get data
+    train_data, test_data, meta = task.get_dataset(args.batch_size, steps_per_epoch=20) # 20 steps for FOL, others might ignore
 
-    config = trm.ModelConfig(
-        vocab_size=meta.get("vocab_size", 256), # Default or from meta
-        depth=2,
-        dim=64,
-        heads=4,
-        n_outputs=2, # Binary classification for Entailment
-    )
+    # Get model config
+    config = task.get_model_config(meta)
+
     model = trm.Model(config)
     model.summary()
 
@@ -61,7 +51,7 @@ def main(args):
         learning_rate=lr_schedule, betas=(0.9, 0.999), weight_decay=0.01
     )
 
-    manager = Trainer(model, optimizer)
+    manager = Trainer(model, optimizer, task)
     manager.train(train_data, val=test_data, epochs=args.epochs)
 
     #! plotting
@@ -78,7 +68,7 @@ def main(args):
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Accuracy")
     fig.tight_layout()
-    # plt.show() # blocking
+    plt.show()
 
 
 if __name__ == "__main__":

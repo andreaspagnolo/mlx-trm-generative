@@ -7,6 +7,8 @@ from mlx.optimizers import Optimizer, clip_grad_norm
 from mlx.utils import tree_map
 from tqdm import tqdm
 
+from tasks.base import Task
+
 
 def ema_update(ema_params, model, alpha=0.95):
     return tree_map(
@@ -25,9 +27,10 @@ def use_ema(model, ema_params):
 
 
 class Trainer:
-    def __init__(self, model: nn.Module, optimizer: Optimizer):
+    def __init__(self, model: nn.Module, optimizer: Optimizer, task: Task):
         self.model = model
         self.optimizer = optimizer
+        self.task = task
 
         self.ema_params = model.parameters()
 
@@ -38,23 +41,10 @@ class Trainer:
 
     def eval_fn(self, carry, batch):
         carry, outputs = self.model(carry, batch)
-        label = carry["current_data"]["label"]
-        pred = outputs["logits"]
-        is_correct = mx.argmax(pred, axis=1) == label
+        
+        loss, correct_count, stats = self.task.loss_fn(outputs, batch, carry)
 
-        ce = nn.losses.cross_entropy(pred, label, reduction="mean")
-        bce = nn.losses.binary_cross_entropy(
-            outputs["q_halt_logits"], is_correct, with_logits=True, reduction="mean"
-        )
-        loss = ce + 0.5 * bce
-
-        stats = {
-            "q_prob_mean": mx.sigmoid(outputs["q_halt_logits"]).mean(),
-            "frac_halted": carry["halted"].mean(),  # fraction halted
-            "avg_steps": carry["steps"].mean(),  # average step index
-        }
-
-        return loss, carry, mx.sum(is_correct), stats
+        return loss, carry, correct_count, stats
 
     def train(self, train, val=None, epochs: int = 10):
         state = [self.model.state, self.optimizer.state]
