@@ -82,8 +82,9 @@ class Trainer:
 
             for batch in train:
                 batch = {k: mx.array(v) for k, v in batch.items()}
+                input_key = "image" if "image" in batch else "inputs"
                 if (carry is None) or (
-                    carry["halted"].shape[0] != batch["image"].shape[0]
+                    carry["halted"].shape[0] != batch[input_key].shape[0]
                 ):  # reset for different batch sizes
                     carry = self.model.initial_carry(batch)
 
@@ -92,9 +93,9 @@ class Trainer:
 
                 self.ema_params = ema_update(self.ema_params, self.model)
 
-                total_loss += loss.item() * batch["image"].shape[0]
+                total_loss += loss.item() * batch[input_key].shape[0]
                 total_correct += int(correct)
-                n += batch["image"].shape[0]
+                n += batch[input_key].shape[0]
 
                 q_prob_accum += float(stats["q_prob_mean"])
                 frac_halted_accum += float(stats["frac_halted"])
@@ -140,9 +141,10 @@ class Trainer:
                     if carry["halted"].all():
                         break
 
-                total_loss += loss.item() * batch["image"].shape[0]
+                input_key = "image" if "image" in batch else "inputs"
+                total_loss += loss.item() * batch[input_key].shape[0]
                 total_correct += int(correct)
-                n += batch["image"].shape[0]
+                n += batch[input_key].shape[0]
 
         avg_loss = total_loss / n
         avg_acc = total_correct / n

@@ -3,7 +3,7 @@ import argparse
 import mlx.core as mx
 import mlx.optimizers as optim
 
-from data.vision import cifar10, mnist
+from data import fol
 from models import trm
 from training.trainer import Trainer
 
@@ -11,8 +11,8 @@ parser = argparse.ArgumentParser(add_help=True)
 parser.add_argument(
     "--dataset",
     type=str,
-    default="mnist",
-    choices=["mnist", "cifar10"],
+    default="fol",
+    choices=["mnist", "cifar10", "fol"],
     help="dataset to use",
 )
 parser.add_argument("-b", "--batch_size", type=int, default=1024, help="batch size")
@@ -28,21 +28,26 @@ def main(args):
     mx.random.seed(args.seed)
 
     if args.dataset == "mnist":
+        from data.vision import mnist
         train_data, test_data, meta = mnist(args.batch_size)
     elif args.dataset == "cifar10":
+        from data.vision import cifar10
         train_data, test_data, meta = cifar10(args.batch_size)
+    elif args.dataset == "fol":
+        train_data, test_data, meta = fol.fol_dataset(args.batch_size, steps_per_epoch=20)
     else:
         raise NotImplementedError(f"{args.dataset=} is not implemented.")
-    n_inputs = next(train_data)["image"].shape[1:]
-    train_data.reset()
+    
+    # n_inputs = next(train_data)["image"].shape[1:] # Not needed for FOL or can be derived differently
+    # train_data.reset() # Generators might not have reset
+
 
     config = trm.ModelConfig(
-        in_channels=n_inputs[-1],
+        vocab_size=meta.get("vocab_size", 256), # Default or from meta
         depth=2,
         dim=64,
         heads=4,
-        patch_size=(4, 4),
-        n_outputs=10,
+        n_outputs=2, # Binary classification for Entailment
     )
     model = trm.Model(config)
     model.summary()
@@ -61,7 +66,10 @@ def main(args):
 
     #! plotting
     import matplotlib.pyplot as plt
+    print("Saving model to fol_model.safetensors")
+    model.save_weights("fol_model.safetensors")
 
+    import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(5, 3))
     lw = 2
     ax.plot(mx.array(manager.train_acc_trace) * 100, label="train", color="r", lw=lw)
@@ -70,7 +78,7 @@ def main(args):
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Accuracy")
     fig.tight_layout()
-    plt.show()
+    # plt.show() # blocking
 
 
 if __name__ == "__main__":

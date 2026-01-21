@@ -9,11 +9,10 @@ from models.abstract import Base
 
 @dataclass
 class ModelConfig:
-    in_channels: int
+    vocab_size: int
     depth: int
     dim: int
     heads: int
-    patch_size: tuple
     n_outputs: int
     pool: str = "cls"
     n: int = 6  # latent steps
@@ -71,28 +70,20 @@ class Block(nn.Module):
         return x
 
 
-class PatchEmbedding(nn.Module):
-    def __init__(self, in_channels: int, patch_size: tuple, dim: int, pool: str):
+class TokenEmbedding(nn.Module):
+    def __init__(self, vocab_size: int, dim: int, pool: str):
         super().__init__()
-        p1, p2 = patch_size
-        self.emb = nn.Conv2d(
-            in_channels,
-            dim,
-            kernel_size=(p1, p2),
-            stride=(p1, p2),
-            bias=True,
-        )
+        self.emb = nn.Embedding(vocab_size, dim)
         self.q_token = 0.02 * mx.random.normal((1, 1, dim))
         self.cls_token = 0.02 * mx.random.normal((1, 1, dim)) if pool == "cls" else None
 
     def __call__(self, x: mx.array) -> mx.array:
         b = x.shape[0]
         x = self.emb(x)
-        x = x.reshape(x.shape[0], -1, x.shape[-1])
         if self.cls_token is not None:
             x = mx.concat([mx.repeat(self.cls_token, b, axis=0), x], axis=1)
         x = mx.concat([mx.repeat(self.q_token, b, axis=0), x], axis=1)
-        return x  # b n+(1 or 2) d
+        return x
 
 
 class OutputHead(nn.Module):
@@ -126,8 +117,8 @@ class Model(Base):
         assert config.pool in {"cls", "mean"}, "pool must be either 'cls' or 'mean'"
         self.config = config
 
-        self.embed = PatchEmbedding(
-            config.in_channels, config.patch_size, config.dim, config.pool
+        self.embed = TokenEmbedding(
+            config.vocab_size, config.dim, config.pool
         )
         self.blocks = nn.Sequential(
             *[Block(config.dim, config.heads) for _ in range(config.depth)]
@@ -139,7 +130,7 @@ class Model(Base):
         self._z_init = mx.random.truncated_normal(-2, 2, (self.config.dim,))
 
     def initial_carry(self, batch: Dict[str, mx.array]):
-        b = batch["image"].shape[0]
+        b = batch["inputs"].shape[0]
         return dict(
             inner_carry=dict(
                 y=mx.zeros((b, 1, self.config.dim)),
@@ -167,7 +158,7 @@ class Model(Base):
         return carry
 
     def deep_recursion(self, carry: dict, batch: Dict[str, mx.array]):
-        x = self.embed(batch["image"])  # b n d
+        x = self.embed(batch["inputs"])  # b n d
         for _ in range(self.config.T):
             carry = self.latent_recursion(carry, x)
         carry["y"] = mx.stop_gradient(carry["y"])
@@ -237,21 +228,20 @@ class Model(Base):
 if __name__ == "__main__":
     mx.random.seed(0)
 
-    x = mx.random.normal(shape=(10, 32, 32, 3))
+    x = mx.random.randint(0, 50, shape=(10, 64))
     t = mx.random.randint(0, 10, shape=(10,))
     model = Model(
         config=ModelConfig(
-            in_channels=x.shape[-1],
+            vocab_size=100,
             depth=2,
             dim=32,
             heads=4,
-            patch_size=(8, 8),
             n_outputs=10,
         )
     )
     model.summary()
 
-    batch = {"image": x, "label": t}
+    batch = {"inputs": x, "label": t}
     carry = model.initial_carry(batch)
     carry, outputs = model(carry, batch)
 
